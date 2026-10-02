@@ -438,25 +438,36 @@ def main() -> None:
         st.markdown('<div class="glass-card">', unsafe_allow_html=True)
         st.markdown('<div class="card-heading">📸 Visual Input & Question</div>', unsafe_allow_html=True)
 
-        uploaded_file = st.file_uploader(
-            "Upload Target Image",
-            type=["png", "jpg", "jpeg", "webp"],
-            help="Supports high-resolution images, automatically optimized for CPU processing.",
-        )
+        # Dual Input: File Upload or Live Webcam
+        input_tab_upload, input_tab_camera = st.tabs(["📁 Upload Image", "📷 Live Webcam"])
+        with input_tab_upload:
+            uploaded_file_upload = st.file_uploader(
+                "Upload Target Image",
+                type=["png", "jpg", "jpeg", "webp"],
+                help="Supports high-resolution images, automatically optimized for CPU processing.",
+                key="uploader",
+            )
+        with input_tab_camera:
+            camera_file = st.camera_input("Take a photo with your webcam", key="camera")
+
+        uploaded_file = camera_file if camera_file is not None else uploaded_file_upload
 
         # Quick Suggestion Chips
         st.markdown("<p style='font-size: 0.9rem; font-weight: 600; color: #CBD5E1; margin-bottom: 0.4rem;'>💡 Quick Suggestion Chips (click to fill question):</p>", unsafe_allow_html=True)
         st.markdown('<div class="chip-container">', unsafe_allow_html=True)
-        chip_cols = st.columns(3)
+        chip_cols = st.columns(4)
         with chip_cols[0]:
+            if st.button("✨ Summarize", use_container_width=True, help="Describe the entire image"):
+                st.session_state["preset_q"] = "describe this image in full detail"
+        with chip_cols[1]:
             if st.button("🏔️ Mountain?", use_container_width=True):
                 st.session_state["preset_q"] = "is there any mountain in this image ?"
-        with chip_cols[1]:
-            if st.button("👤 Person?", use_container_width=True):
-                st.session_state["preset_q"] = "is there any person in image ?"
         with chip_cols[2]:
-            if st.button("🐆 Wildlife?", use_container_width=True):
-                st.session_state["preset_q"] = "is there any leopard or animal in this image ?"
+            if st.button("👤 Person?", use_container_width=True):
+                st.session_state["preset_q"] = "is there any person in this image ?"
+        with chip_cols[3]:
+            if st.button("📝 Read Text", use_container_width=True, help="Extract visible text"):
+                st.session_state["preset_q"] = "what text is written in this image ?"
         st.markdown('</div>', unsafe_allow_html=True)
 
         default_question = st.session_state.get("preset_q", "")
@@ -582,11 +593,26 @@ def main() -> None:
         elapsed = time.time() - start_time
         progress.progress(100, text=f"Finished in {elapsed:.2f}s")
 
-        # Answer Banner
+        # Clean speech string for browser SpeechSynthesis
+        clean_speech = final_answer_text.replace("'", "\\'").replace('"', '\\"').replace("\n", " ")
+
+        # Answer Banner with Voice Read-Aloud Audio Controls
         st.markdown(
             f"""
             <div class="answer-banner">
-                <div class="answer-tag">✦ Predicted Answer</div>
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.4rem;">
+                    <div class="answer-tag">✦ Predicted Answer</div>
+                    <div style="display: flex; gap: 0.4rem;">
+                        <button onclick="window.speechSynthesis.cancel(); let u = new SpeechSynthesisUtterance('{clean_speech}'); u.rate = 0.95; window.speechSynthesis.speak(u);" 
+                                style="background: rgba(16, 185, 129, 0.25); border: 1px solid rgba(16, 185, 129, 0.6); color: #34D399; padding: 0.22rem 0.75rem; border-radius: 9999px; font-weight: 700; font-size: 0.82rem; cursor: pointer;">
+                            🔊 Read Aloud
+                        </button>
+                        <button onclick="window.speechSynthesis.cancel();"
+                                style="background: rgba(239, 68, 68, 0.2); border: 1px solid rgba(239, 68, 68, 0.5); color: #F87171; padding: 0.22rem 0.6rem; border-radius: 9999px; font-weight: 700; font-size: 0.82rem; cursor: pointer;">
+                            ⏹️ Stop
+                        </button>
+                    </div>
+                </div>
                 <div class="answer-text">{final_answer_text}</div>
             </div>
             """,
@@ -634,6 +660,7 @@ def main() -> None:
 
         tab_spotlight, tab_original, tab_details = st.tabs(["🎯 Object Spotlight", "🖼️ Original Image", "📊 Deep Reasoning"])
 
+        detections = []
         with tab_spotlight:
             if is_negative_vqa:
                 if target_obj:
@@ -663,6 +690,21 @@ def main() -> None:
                     )
                     det_summary = ", ".join(f"**{d.label.capitalize()}** ({d.score:.0%})" for d in detections)
                     st.success(f"Pinpointed: {det_summary}")
+
+                    # Zoomed Target Region Inspector
+                    bx1, by1, bx2, by2 = detections[0].box
+                    bx1, by1, bx2, by2 = max(0, int(bx1)), max(0, int(by1)), min(image.width, int(bx2)), min(image.height, int(by2))
+                    if bx2 > bx1 and by2 > by1:
+                        crop_target_img = image.crop((bx1, by1, bx2, by2))
+                        with st.expander("🔍 Inspect Zoomed Target Region", expanded=False):
+                            col_c1, col_c2 = st.columns([1, 1.2])
+                            with col_c1:
+                                st.image(crop_target_img, caption=f"Zoomed: {target_obj or 'Target'}", use_container_width=True)
+                            with col_c2:
+                                st.markdown(f"**Entity:** `{detections[0].label.capitalize()}`")
+                                st.markdown(f"**Confidence:** `{detections[0].score:.1%}`")
+                                st.markdown(f"**Coordinates:** `({bx1}, {by1}, {bx2}, {by2})`")
+                                st.markdown(f"**Region Size:** `{crop_target_img.width} x {crop_target_img.height} px`")
                 elif target_obj:
                     st.info(f"🔎 Target **'{target_obj}'** was not detected in this image with sufficient confidence.")
                 else:
@@ -679,6 +721,65 @@ def main() -> None:
             for item in ranked_display:
                 score_pct = item['score'] * 100
                 st.markdown(f"- **{item['answer']}** — `{score_pct:.1f}%`")
+
+        # --- Productivity Actions: Report Download & Session Memory ---
+        st.markdown("<br/>", unsafe_allow_html=True)
+        col_down, col_blank = st.columns([1.2, 1])
+
+        det_str = ", ".join([f"{d.label} ({d.score:.1%}) at {d.box}" for d in detections]) if detections else "No localized bounding boxes"
+        report_md = f"""# OmniSight AI — Visual Inspection Report
+**Generated on:** {time.strftime('%Y-%m-%d %H:%M:%S')}
+
+## 1. Input & Processing Summary
+- **Image Resolution:** {image.width} x {image.height} px
+- **Processing Time:** {elapsed:.2f} seconds
+- **Inference Engine:** {'BLIP-VQA (INT8 Quantized)' if is_blip else 'CLIP Zero-Shot'}
+
+## 2. Visual Reasoning
+- **Question Asked:** {question}
+- **Intent Type:** {analysis.intent}
+- **Predicted Answer:** {final_answer_text}
+- **Confidence Score:** {confidence_val:.1%}
+
+## 3. Spatial Object Grounding
+- **Target Concept:** {target_obj or 'None identified'}
+- **Detected Objects:** {det_str}
+
+---
+*OmniSight AI — Advanced Multimodal Vision QA System*
+"""
+        with col_down:
+            st.download_button(
+                "📥 Download Inspection Report (.md)",
+                data=report_md,
+                file_name=f"omnisight_inspection_{int(time.time())}.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
+
+        # Multi-turn Query History in Current Session
+        if "session_history" not in st.session_state:
+            st.session_state["session_history"] = []
+
+        hist_item = {
+            "time": time.strftime("%H:%M:%S"),
+            "question": question,
+            "answer": final_answer_text,
+            "confidence": f"{confidence_val:.1%}",
+            "engine": "BLIP-VQA" if is_blip else "CLIP-ZeroShot",
+        }
+        if not st.session_state["session_history"] or st.session_state["session_history"][-1]["question"] != question:
+            st.session_state["session_history"].append(hist_item)
+
+        with st.expander(f"📜 Session History ({len(st.session_state['session_history'])} questions asked)", expanded=False):
+            for i, h_item in enumerate(reversed(st.session_state["session_history"])):
+                q_num = len(st.session_state["session_history"]) - i
+                st.markdown(f"**Q{q_num}:** *{h_item['question']}*  \n👉 **Ans:** **{h_item['answer']}** ({h_item['confidence']}) — `{h_item['time']}`")
+                if i < len(st.session_state["session_history"]) - 1:
+                    st.markdown("---")
+            if st.button("🗑️ Clear History", key="clear_session_hist", use_container_width=True):
+                st.session_state["session_history"] = []
+                st.rerun()
 
         st.markdown("</div>", unsafe_allow_html=True)
 
